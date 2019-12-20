@@ -1,6 +1,5 @@
 
 import uuid
-import itertools
 
 from flask import Flask, request, jsonify, send_from_directory
 from flask_restful import Api, Resource, fields, marshal
@@ -11,6 +10,7 @@ from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, UniqueCons
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.ext.orderinglist import ordering_list
 
 import version
 
@@ -27,42 +27,40 @@ class DB:
     class Blob(Base):
         __tablename__ = 'blobs'
 
-        blob = Column(String(36), name='id', primary_key=True)
+        blob_id = Column(String(36), primary_key=True)
 
         marshal_fields = {
-            'id': fields.String(attribute='blob'),
+            'id': fields.String(attribute='blob_id'),
             'uri': fields.Url('blobs_data_endpoint')
         }
-
-        def __init__(self, blob):
-            self.blob = str(blob)
 
         def marshal(self):
             return marshal(self, self.marshal_fields)
 
     class Entry(Base):
         __tablename__ = 'entries'
-        __table_args__ = UniqueConstraint('node', 'rank'),
 
-        id = Column(Integer, primary_key=True, nullable=False, autoincrement=True)
-        blob = Column(String(36), ForeignKey('blobs.id'), nullable=False)
-        node = Column(Integer, ForeignKey('nodes.id'), nullable=False)
+        entry_id = Column(Integer, primary_key=True, nullable=False, autoincrement=True)
+        blob_id = Column(String(36), ForeignKey('blobs.blob_id'), nullable=False)
+        node_id = Column(Integer, ForeignKey('nodes.node_id'), nullable=False)
         rank = Column(Integer, nullable=False)
 
     class Node(Base):
         __tablename__ = 'nodes'
         __table_args__ = UniqueConstraint('parent', 'string'),
 
-        id = Column(Integer, primary_key=True, nullable=False, autoincrement=True)
+        node_id = Column(Integer, primary_key=True, nullable=False, autoincrement=True)
         string = Column(String, nullable=False)
-        parent = Column(Integer, ForeignKey('nodes.id'))
+        parent = Column(Integer, ForeignKey('nodes.node_id'))
 
         created = Column(DateTime, server_default=func.now())
         updated = Column(DateTime, server_default=func.now(), server_onupdate=func.now())
         timeout = Column(DateTime)
 
         children = relationship('Node')
-        contents = relationship('Entry', backref='nodes')
+        contents = relationship('Entry',
+                                order_by='Entry.rank', cascade='all, delete-orphan',
+                                collection_class=ordering_list('rank'))
 
         marshal_fields = {
             'created': fields.DateTime,
@@ -72,8 +70,8 @@ class DB:
                 'string': fields.String
             })),
             'contents': fields.List(fields.Nested({
-                'id': fields.String(attribute='blob'),
-                'uri': fields.Url(attribute='blob', endpoint='blobs_data_endpoint')
+                'id': fields.String(attribute='blob_id'),
+                'uri': fields.Url(endpoint='blobs_data_endpoint')
             }))
         }
 
@@ -108,7 +106,7 @@ class BlobList(Resource):
             while not request.stream.is_exhausted:
                 f.write(request.stream.read(1024 ** 2))
 
-        blob = DB.Blob(blob_id)
+        blob = DB.Blob(blob_id=str(blob_id))
 
         session = Session()
         session.add(blob)
@@ -119,29 +117,32 @@ class BlobList(Resource):
 
 class Node(Resource):
 
-    def get(self, path):
+    @classmethod
+    def get(cls, path):
 
         session = Session()
-        node = self._node_from_path(session, path)
+        node = cls._node_from_path(session, path)
         session.commit()
 
         return jsonify(node.marshal())
 
-    def patch(self, path):
+    @classmethod
+    def patch(cls, path):
 
         session = Session()
-        node = self._node_from_path(session, path)
+        node = cls._node_from_path(session, path)
 
         def append(blobs):
-            node.contents.extend([DB.Entry(node=node.id, blob=blob) for blob in blobs])
+            for blob in blobs:
+                node.contents.append(DB.Entry(blob_id=blob))
 
         def push(blobs):
-            entries = [DB.Entry(node=node.id, blob=blob) for blob in blobs]
-            entries.extend(node.contents)
-            node.contents = entries
+            for blob in reversed(blobs):
+                node.contents.insert(0, DB.Entry(blob_id=blob))
 
         def pop(blobs):
-            node.contents = node.contents[1:]
+            if node.contents:
+                node.contents.pop(0)
 
         operations = {
             'append': append,
@@ -154,16 +155,14 @@ class Node(Resource):
 
         operation(arguments)
 
-        for rank, entry in enumerate(node.contents):
-            entry.rank = rank
-
         session.commit()
 
         return jsonify(node.marshal())
 
-    def _node_from_path(self, session, path):
+    @classmethod
+    def _node_from_path(cls, session, path):
 
-        root = session.query(DB.Node).filter_by(string=self.name, parent=None).one()
+        root = session.query(DB.Node).filter_by(string=cls.name, parent=None).one()
 
         def node_from_path_recursive(current, tokens):
 
@@ -178,10 +177,8 @@ class Node(Resource):
                     return node_from_path_recursive(child, tokens)
 
             # No appropriate child - create one.
-            child = DB.Node(
-                string=string,
-                parent=current.id
-            )
+            child = DB.Node(string=string)
+            current.children.append(child)
 
             # Remind the session that the child should be persisted.
             session.add(child)
@@ -202,16 +199,20 @@ class Node(Resource):
 
         session.commit()
 
-        api.add_resource(cls, f"/{cls.name}/<path:path>")
+        api.add_resource(cls, f"/{cls.name}/<path:path>", endpoint=cls.endpoint)
 
 
 class Sessions(Node):
     name = 'sessions'
+    endpoint = 'sessions_node_endpoint'
+
     timeout = 3600
 
 
 class Scanners(Node):
     name = 'scanners'
+    endpoint = 'scanners_node_endpoint'
+
     timeout = None
 
 
@@ -225,7 +226,7 @@ def create_app():
     api.add_resource(Info, '/info')
 
     api.add_resource(BlobList, '/blobs')
-    api.add_resource(BlobData, '/blobs/<blob>', endpoint='blobs_data_endpoint')
+    api.add_resource(BlobData, '/blobs/<blob_id>', endpoint='blobs_data_endpoint')
 
     Sessions.register(api)
     Scanners.register(api)
