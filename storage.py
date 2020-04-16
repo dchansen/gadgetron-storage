@@ -29,8 +29,8 @@ class DB:
 
     class Leaf(db.Model):
         __tablename__ = 'leaves'
-        id = db.Column(db.Integer, primary_key=True, nullable=False)
-        path = db.Column(db.String, unique=True, nullable=False)
+        id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+        path = db.Column(db.String, unique=True, nullable=False,index=True)
         created = db.Column(db.DateTime, server_default=db.func.now())
         updated = db.Column(db.DateTime, server_default=db.func.now(), server_onupdate=db.func.now())
         timeout = db.Column(db.DateTime)
@@ -43,6 +43,8 @@ class DB:
             'created': fields.DateTime,
             'updated': fields.DateTime,
             'timeout': fields.DateTime,
+            'type' : fields.String,
+            'path' : fields.String,
             'contents': fields.List(fields.Nested({
                 'id': fields.String(attribute='blob_id'),
                 'uri': fields.Url(endpoint='blobs_data_endpoint')
@@ -60,6 +62,10 @@ class DB:
         leaf_id = db.Column(db.Integer, db.ForeignKey('leaves.id'), nullable=False)
 
         rank = db.Column(db.Integer, nullable=False)
+
+
+def get_children(session,path):
+    return session.query(DB.Leaf).filter(DB.Leaf.path.like(path+"/%")).order_by(DB.Leaf.path).all()
 
 
 class Info(Resource):
@@ -102,30 +108,28 @@ class Node(Resource):
 
     @classmethod
     def get(cls, path):
+        path = cls.name + '/' + path
 
         leaf = db.session.query(DB.Leaf).filter(DB.Leaf.path == path).one_or_none()
-        db.session.commit()
 
         if leaf:
+            leaf.updated = db.func.now()
+            db.session.commit()
             return jsonify(leaf.marshal())
         else:
-            return None
+            children = get_children(db.session,path)
+            return jsonify([child.marshal() for child in children])
 
     @classmethod
     def patch(cls, path):
-
+        path = cls.name + '/' + path
         leaf = cls._get_or_create(db.session, path)
-
-        def append(blobs):
-            for blob in blobs:
-                leaf.contents.append(DB.Entry(blob_id=blob))
 
         def push(blobs):
             for blob in reversed(blobs):
                 leaf.contents.insert(0, DB.Entry(blob_id=blob))
 
         operations = {
-            'append': append,
             'push': push
         }
 
@@ -146,6 +150,8 @@ class Node(Resource):
             leaf = DB.Leaf(path=path)
             session.add(leaf)
             session.flush()
+        else:
+            leaf.updated=db.func.now()
         return leaf
 
     @classmethod

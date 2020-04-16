@@ -39,7 +39,7 @@ def test_missing(client):
 
     data = rv.get_json()
 
-    assert data is None
+    assert data == []
 
 def test_push(client):
     buffer = io.BytesIO()
@@ -57,12 +57,12 @@ def test_push(client):
 
     response_dict = { 'operation' : 'push', 'arguments': [json['id']]}
 
-    rv = client.patch('/v1/sessions/noiseninja',json=response_dict)
+    rv = client.patch('/v1/sessions/42/noiseninja',json=response_dict)
 
     metadata_json = rv.get_json()
     assert metadata_json['contents'][0]['id'] == json['id']
 
-    rv = client.get('/v1/sessions/noiseninja')
+    rv = client.get('/v1/sessions/42/noiseninja')
     json = rv.get_json()
     assert len(json['contents']) == 1
     uri = json['contents'][0]['uri']
@@ -74,6 +74,15 @@ def test_push(client):
 
     assert (testdata  == recovered).all()
 
+
+    rv = client.get('/v1/sessions/42')
+    group_json = rv.get_json()
+    assert len(group_json) == 1
+    assert group_json[0] == json
+
+    rv = client.get('/v1/sessions/4')
+    group_json = rv.get_json()
+    assert len(group_json) == 0
 
 
 
