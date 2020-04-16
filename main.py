@@ -36,11 +36,15 @@ def main():
     sock = socket.socket()
     sock.bind((args.address, args.port))
     sock.listen()
+    app =storage.create_app(data_folder=args.storage_dir)
 
-    server = WSGIServer(sock, storage.create_app(data_folder=args.storage_dir))
+    server = WSGIServer(sock, app)
 
     print(f"Gadgetron Storage Server v. {version.version}")
     print(f"Accepting connections on port {sock.getsockname()[1]}")
+
+    with app.app_context():
+        storage.garbage_collect()
 
     server.serve_forever()
 

@@ -8,6 +8,7 @@ from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.ext.orderinglist import ordering_list
 import version
 from pathlib import Path
+import gevent
 
 db = SQLAlchemy()
 
@@ -180,18 +181,32 @@ class Debug(Node):
     timeout = None
 
 
-
 def garbage_collect():
-
-    decayed = db.session.query(DB.Leaf).filter((DB.Leaf.updated+DB.Leaf.timeout) > db.func.now()).all()
-    db.session.delete(decayed)
+    db.session.query(DB.Leaf).filter((DB.Leaf.updated + DB.Leaf.timeout) > 'now()').delete()
     db.session.flush()
 
-    db.session.query(DB.Entry)
+    leaves = db.session.query(DB.Leaf.id)
+
+    db.session.query(DB.Entry).filter(~DB.Entry.leaf_id.in_(leaves)).delete(synchronize_session='fetch')
+    db.session.flush()
+
+    entries = db.session.query(DB.Entry.blob_id)
+    blobs_to_be_deleted = db.session.query(DB.Blob).filter(~DB.Blob.blob_id.in_(entries))
+    folder = current_app.config['DATA_FOLDER']
+
+    def delete_blob(blob_id):
+        os.unlink(os.path.join(folder, f"{blob_id}.bin"))
+
+    for blob in blobs_to_be_deleted.all():
+        delete_blob(blob.blob_id)
+
+    blobs_to_be_deleted.delete(synchronize_session='fetch')
+    db.session.commit()
+
+    gevent.spawn_later(current_app.config['GC_INTERVAL'], garbage_collect)
 
 
-
-def create_app(database_file=None, data_folder=None):
+def create_app(database_file=None, data_folder=None,gc_interval = 600):
     app = Flask(__name__)
     api = Api(app, prefix='/v1')
 
@@ -207,17 +222,22 @@ def create_app(database_file=None, data_folder=None):
     app.config['JSONIFY_PRETTYPRINT_REGULAR'] = True
 
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+    app.config['GC_INTERVAL'] = gc_interval
 
     if database_file is None:
         database_file = os.path.join(app.instance_path, 'gadgetron_storage.sqlite')
     if data_folder is None:
         data_folder = os.path.join(app.instance_path, 'blob')
 
-    app.config.from_mapping(SQLALCHEMY_DATABASE_URI='sqlite:///' + Path(database_file).as_posix(),
+    database_path = Path(database_file)
+    database_path.parent.mkdir(parents=True,exist_ok=True)
+    if ~database_path.exists():
+        database_path.touch()
+
+    app.config.from_mapping(SQLALCHEMY_DATABASE_URI='sqlite:///' + database_path.as_posix(),
                             DATA_FOLDER=data_folder)
 
     db.init_app(app)
-
-
+    db.create_all(app=app)
 
     return app
