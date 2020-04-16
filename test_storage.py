@@ -7,15 +7,14 @@ import numpy as np
 import io
 import pickle
 
+
 @pytest.fixture
 def client():
     db_fd, filename = tempfile.mkstemp()
-    db_name = "sqlite:///" + Path(filename).as_posix()
-    print(db_name)
 
     tmpdir = tempfile.TemporaryDirectory()
 
-    app = storage.create_app({"SQLALCHEMY_DATABASE_URI": db_name, "DATA_FOLDER" : tmpdir.name})
+    app = storage.create_app(database_file=filename, data_folder=tmpdir.name)
     storage.db.create_all(app=app)
     with app.test_client() as client:
         with app.app_context():
@@ -23,7 +22,6 @@ def client():
 
     os.close(db_fd)
     os.unlink(filename)
-
 
 
 def test_info(client):
@@ -34,12 +32,12 @@ def test_info(client):
 
 
 def test_missing(client):
-
     rv = client.get('/v1/sessions/187/noisedata')
 
     data = rv.get_json()
 
     assert data == []
+
 
 def test_push(client):
     buffer = io.BytesIO()
@@ -48,16 +46,14 @@ def test_push(client):
     testdata = np.random.randn(10)
     pickler.dump(testdata)
 
-
-
-    rv = client.put('/v1/blobs',data=buffer.getvalue())
+    rv = client.put('/v1/blobs', data=buffer.getvalue())
 
     json = rv.get_json()
-    assert json  is not None
+    assert json is not None
 
-    response_dict = { 'operation' : 'push', 'arguments': [json['id']]}
+    response_dict = {'operation': 'push', 'arguments': [json['id']]}
 
-    rv = client.patch('/v1/sessions/42/noiseninja',json=response_dict)
+    rv = client.patch('/v1/sessions/42/noiseninja', json=response_dict)
 
     metadata_json = rv.get_json()
     assert metadata_json['contents'][0]['id'] == json['id']
@@ -72,18 +68,13 @@ def test_push(client):
 
     recovered = pickle.loads(rv.data)
 
-    assert (testdata  == recovered).all()
-
+    assert (testdata == recovered).all()
 
     rv = client.get('/v1/sessions/42')
     group_json = rv.get_json()
     assert len(group_json) == 1
-    assert group_json[0] == json
+    assert group_json[0] == 'sessions/42/noiseninja'
 
     rv = client.get('/v1/sessions/4')
     group_json = rv.get_json()
     assert len(group_json) == 0
-
-
-
-

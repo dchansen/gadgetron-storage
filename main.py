@@ -17,7 +17,7 @@ def main():
                                      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
     parser.add_argument('-S', '--storage-dir',
-                        default=os.getcwd(),
+                        default=os.path.join(os.getcwd(),"blobs"),
                         help="Set the storage directory.")
 
     parser.add_argument('-a', '--address', type=str, default='localhost',
@@ -30,13 +30,14 @@ def main():
     args = parser.parse_args()
 
     # Ensure the 'blobs' subdirectory exists.
-    os.makedirs('./blobs', exist_ok=True)
+
+    os.makedirs(args.storage_dir,exist_ok=True)
 
     sock = socket.socket()
     sock.bind((args.address, args.port))
     sock.listen()
 
-    server = WSGIServer(sock, storage.create_app())
+    server = WSGIServer(sock, storage.create_app(data_folder=args.storage_dir))
 
     print(f"Gadgetron Storage Server v. {version.version}")
     print(f"Accepting connections on port {sock.getsockname()[1]}")

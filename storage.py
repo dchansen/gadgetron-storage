@@ -30,7 +30,7 @@ class DB:
     class Leaf(db.Model):
         __tablename__ = 'leaves'
         id = db.Column(db.Integer, primary_key=True, autoincrement=True)
-        path = db.Column(db.String, unique=True, nullable=False,index=True)
+        path = db.Column(db.String, unique=True, nullable=False, index=True)
         created = db.Column(db.DateTime, server_default=db.func.now())
         updated = db.Column(db.DateTime, server_default=db.func.now(), server_onupdate=db.func.now())
         timeout = db.Column(db.DateTime)
@@ -43,8 +43,8 @@ class DB:
             'created': fields.DateTime,
             'updated': fields.DateTime,
             'timeout': fields.DateTime,
-            'type' : fields.String,
-            'path' : fields.String,
+            'type': fields.String,
+            'path': fields.String,
             'contents': fields.List(fields.Nested({
                 'id': fields.String(attribute='blob_id'),
                 'uri': fields.Url(endpoint='blobs_data_endpoint')
@@ -64,8 +64,8 @@ class DB:
         rank = db.Column(db.Integer, nullable=False)
 
 
-def get_children(session,path):
-    return session.query(DB.Leaf).filter(DB.Leaf.path.like(path+"/%")).order_by(DB.Leaf.path).all()
+def get_children(session, path):
+    return session.query(DB.Leaf).filter(DB.Leaf.path.like(path + "/%")).order_by(DB.Leaf.path).all()
 
 
 class Info(Resource):
@@ -117,8 +117,8 @@ class Node(Resource):
             db.session.commit()
             return jsonify(leaf.marshal())
         else:
-            children = get_children(db.session,path)
-            return jsonify([child.marshal() for child in children])
+            children = get_children(db.session, path)
+            return jsonify([child.path for child in children])
 
     @classmethod
     def patch(cls, path):
@@ -151,7 +151,7 @@ class Node(Resource):
             session.add(leaf)
             session.flush()
         else:
-            leaf.updated=db.func.now()
+            leaf.updated = db.func.now()
         return leaf
 
     @classmethod
@@ -180,7 +180,18 @@ class Debug(Node):
     timeout = None
 
 
-def create_app(test_config=None):
+
+def garbage_collect():
+
+    decayed = db.session.query(DB.Leaf).filter((DB.Leaf.updated+DB.Leaf.timeout) > db.func.now()).all()
+    db.session.delete(decayed)
+    db.session.flush()
+
+    db.session.query(DB.Entry)
+
+
+
+def create_app(database_file=None, data_folder=None):
     app = Flask(__name__)
     api = Api(app, prefix='/v1')
 
@@ -194,15 +205,19 @@ def create_app(test_config=None):
     Debug.register(api)
 
     app.config['JSONIFY_PRETTYPRINT_REGULAR'] = True
-    if test_config is None:
-        app.config.from_mapping(SQLALCHEMY_DATABASE_URI='sqlite://' + os.path.join(app.instance_path,
-                                                                                   'gadgetron_storage.sqlite'),
-                                DATA_FOLDER=os.path.join(app.instance_path, 'blob'))
-    else:
-        app.config.from_mapping(test_config)
 
+    app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
+    if database_file is None:
+        database_file = os.path.join(app.instance_path, 'gadgetron_storage.sqlite')
+    if data_folder is None:
+        data_folder = os.path.join(app.instance_path, 'blob')
+
+    app.config.from_mapping(SQLALCHEMY_DATABASE_URI='sqlite:///' + Path(database_file).as_posix(),
+                            DATA_FOLDER=data_folder)
 
     db.init_app(app)
+
+
 
     return app
