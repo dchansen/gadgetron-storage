@@ -90,12 +90,18 @@ class BlobList(Resource):
 
     @classmethod
     def put(cls):
+        current_app.logger.info("Storing data")
         blob_id = uuid.uuid4()
         folder = current_app.config['DATA_FOLDER']
 
         with open(os.path.join(folder, f"{blob_id}.bin"), 'wb') as f:
-            while not request.stream.is_exhausted:
-                f.write(request.stream.read(1024 ** 2))
+            is_good = True
+            while is_good:
+                data =  request.stream.read(1024**2)
+                current_app.logger.info("Got %d bytes of data ",len(data))
+                print("Got all da dataz ",len(data))
+                f.write(data)
+                is_good = len(data) > 0
 
         blob = DB.Blob(blob_id=str(blob_id))
 
@@ -109,6 +115,7 @@ class Node(Resource):
 
     @classmethod
     def get(cls, path):
+        current_app.logger.info("Getting "+path)
         path = cls.name + '/' + path
 
         leaf = db.session.query(DB.Leaf).filter(DB.Leaf.path == path).one_or_none()
@@ -123,6 +130,7 @@ class Node(Resource):
 
     @classmethod
     def patch(cls, path):
+        current_app.logger.info("Patching "+path)
         path = cls.name + '/' + path
         leaf = cls._get_or_create(db.session, path)
 
@@ -167,9 +175,9 @@ class Sessions(Node):
     timeout = 3600
 
 
-class Scanners(Node):
-    name = 'scanners'
-    endpoint = 'scanners_node_endpoint'
+class Noise(Node):
+    name = 'noise'
+    endpoint = 'noise_node_endpoint'
 
     timeout = None
 
@@ -216,7 +224,7 @@ def create_app(database_file=None, data_folder=None,gc_interval = 600):
     api.add_resource(BlobData, '/blobs/<blob_id>', endpoint='blobs_data_endpoint')
 
     Sessions.register(api)
-    Scanners.register(api)
+    Noise.register(api)
     Debug.register(api)
 
     app.config['JSONIFY_PRETTYPRINT_REGULAR'] = True
