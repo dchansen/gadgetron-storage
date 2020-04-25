@@ -98,8 +98,6 @@ class BlobList(Resource):
             is_good = True
             while is_good:
                 data =  request.stream.read(1024**2)
-                current_app.logger.info("Got %d bytes of data ",len(data))
-                print("Got all da dataz ",len(data))
                 f.write(data)
                 is_good = len(data) > 0
 
@@ -189,29 +187,30 @@ class Debug(Node):
     timeout = None
 
 
-def garbage_collect():
-    db.session.query(DB.Leaf).filter((DB.Leaf.updated + DB.Leaf.timeout) > 'now()').delete()
-    db.session.flush()
+def garbage_collect(app):
+    with app.app_context():
+        db.session.query(DB.Leaf).filter((DB.Leaf.updated + DB.Leaf.timeout) > 'now()').delete()
+        db.session.flush()
 
-    leaves = db.session.query(DB.Leaf.id)
+        leaves = db.session.query(DB.Leaf.id)
 
-    db.session.query(DB.Entry).filter(~DB.Entry.leaf_id.in_(leaves)).delete(synchronize_session='fetch')
-    db.session.flush()
+        db.session.query(DB.Entry).filter(~DB.Entry.leaf_id.in_(leaves)).delete(synchronize_session='fetch')
+        db.session.flush()
 
-    entries = db.session.query(DB.Entry.blob_id)
-    blobs_to_be_deleted = db.session.query(DB.Blob).filter(~DB.Blob.blob_id.in_(entries))
-    folder = current_app.config['DATA_FOLDER']
+        entries = db.session.query(DB.Entry.blob_id)
+        blobs_to_be_deleted = db.session.query(DB.Blob).filter(~DB.Blob.blob_id.in_(entries))
+        folder = current_app.config['DATA_FOLDER']
 
-    def delete_blob(blob_id):
-        os.unlink(os.path.join(folder, f"{blob_id}.bin"))
+        blobs_to_be_deleted.delete(synchronize_session='fetch')
+        db.session.commit()
 
-    for blob in blobs_to_be_deleted.all():
-        delete_blob(blob.blob_id)
+        def delete_blob(blob_id):
+            os.unlink(os.path.join(folder, f"{blob_id}.bin"))
 
-    blobs_to_be_deleted.delete(synchronize_session='fetch')
-    db.session.commit()
+        for blob in blobs_to_be_deleted.all():
+            delete_blob(blob.blob_id)
 
-    gevent.spawn_later(current_app.config['GC_INTERVAL'], garbage_collect)
+        gevent.spawn_later(current_app.config['GC_INTERVAL'], lambda: garbage_collect(app))
 
 
 def create_app(database_file=None, data_folder=None,gc_interval = 600):

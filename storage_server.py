@@ -43,8 +43,7 @@ def main():
     print(f"Gadgetron Storage Server v. {version.version}")
     print(f"Accepting connections on port {sock.getsockname()[1]}")
 
-    with app.app_context():
-        storage.garbage_collect()
+    storage.garbage_collect(app)
 
     server.serve_forever()
 
